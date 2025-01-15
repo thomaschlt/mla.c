@@ -9,10 +9,12 @@ A C implementation of Multi-head Linear Attention with RoPE (Rotary Position Emb
 - Memory-efficient key-value caching
 - Content and positional attention scoring
 - Numerically stable softmax implementation
+- RMSNorm implementation (for query and key/value paths)
 
 ## Paper Implemented 📄
 
-This implementation is based on the ["DeepSeek-V3 Technical Report"]((https://arxiv.org/pdf/2412.19437)) by DeepSeek-AI
+This implementation is based on the ["DeepSeek-V3 Technical Report"](<(https://arxiv.org/pdf/2412.19437)>) by DeepSeek-AI
+
 ## Next To Do 📝
 
 - [ ] Add batch processing support
@@ -23,4 +25,3 @@ This implementation is based on the ["DeepSeek-V3 Technical Report"]((https://ar
 ## Contribution 🤝
 
 Feel free to contribute or suggest improvements!
-
