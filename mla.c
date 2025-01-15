@@ -23,10 +23,12 @@ typedef struct MLA_Layer
     float **W_O;          // output projection matrice
     float **W_DKV;        // down-projection matrice for keys and values
 
-    float ***K_cache; // [seq_len][n_h][qk_head_dim]
-    float ***V_cache; // [seq_len][n_h][v_head_dim]
-    int seq_len;      // current sequence length
-    int max_seq_len;  // Maximum sequence length
+    float ***K_cache;       // [seq_len][n_h][qk_head_dim]
+    float ***V_cache;       // [seq_len][n_h][v_head_dim]
+    int seq_len;            // current sequence length
+    int max_seq_len;        // Maximum sequence length
+    float *RMS_norm_weight; // RMSNorm weights
+    float *norm_weight;     // RMSNorm weights
 } MLA_Layer;
 
 // complex number structure
@@ -99,6 +101,9 @@ void print_vector(const char *name, float *vec, int size)
 MLA_Layer *init_mla_layer(int d, int n_h, int qk_nope_head_dim, int qk_rope_head_dim, int d_c, int d_c_prime, int v_head_dim, int max_seq_len)
 {
     MLA_Layer *layer = (MLA_Layer *)malloc(sizeof(MLA_Layer));
+    if (!layer)
+        return NULL;
+
     layer->d = d;
     layer->n_h = n_h;
     layer->qk_nope_head_dim = qk_nope_head_dim;
@@ -127,6 +132,20 @@ MLA_Layer *init_mla_layer(int d, int n_h, int qk_nope_head_dim, int qk_rope_head
         layer->V_cache[i] = allocate_matrice(n_h, v_head_dim);
     }
 
+    // initialization of normalization weights
+    layer->norm_weight = malloc(d * sizeof(float));
+    if (!layer->norm_weight)
+    {
+        free_mla_layer(layer);
+        return NULL;
+    }
+
+    // initialization of norm weights to 1.0
+    for (int i = 0; i < d; i++)
+    {
+        layer->norm_weight[i] = 1.0f;
+    }
+
     return layer;
 }
 
@@ -145,6 +164,7 @@ void free_mla_layer(MLA_Layer *layer)
     free_matrice(layer->W_O, layer->d);
     free_matrice(layer->W_DKV, layer->d_c);
     // free layer itself
+    free(layer->norm_weight);
     free(layer);
 }
 
@@ -191,6 +211,30 @@ void apply_rope(float *vec, int position, int qk_head_dim)
         vec[i] = result.real;
         vec[i + 1] = result.imag;
     }
+}
+
+float *RMS_norm(float *vec, float *weight, int dim)
+{
+    float *output = malloc(dim * sizeof(float));
+    if (!output)
+        return NULL;
+
+    // sum of squares
+    float ss = 0.0f;
+    for (int i = 0; i < dim; i++)
+    {
+        ss += vec[i] * vec[i];
+    }
+
+    // RMS
+    float rms = 1.0f / sqrt(ss / dim + 1e-5);
+
+    // normalize and scale
+    for (int i = 0; i < dim; i++)
+    {
+        output[i] = vec[i] * rms * weight[i];
+    }
+    return output;
 }
 
 float dot_product_scalar(float *vec1, float *vec2, int len)
@@ -407,12 +451,22 @@ float *mla_forward(MLA_Layer *layer, float *h_t)
     // use goto cleanup pattern for error handling
     // this allows us to properly free memory even if an allocation fails
 
-    //  compressed latent vectors
-    c_t_Q = matmul(layer->W_DQ, h_t, layer->d_c_prime, layer->d);
+    // Apply RMSNorm for query path
+    float *normalized_q = RMS_norm(h_t, layer->norm_weight, layer->d);
+    if (!normalized_q)
+        goto cleanup;
+
+    // Apply RMSNorm for key/value path
+    float *normalized_kv = RMS_norm(h_t, layer->norm_weight, layer->d);
+    if (!normalized_kv)
+        goto cleanup;
+
+    // Use normalized inputs for the respective paths
+    c_t_Q = matmul(layer->W_DQ, normalized_q, layer->d_c_prime, layer->d);
     if (!c_t_Q)
         goto cleanup;
 
-    c_t_KV = matmul(layer->W_DKV, h_t, layer->d_c, layer->d);
+    c_t_KV = matmul(layer->W_DKV, normalized_kv, layer->d_c, layer->d);
     if (!c_t_KV)
         goto cleanup;
 
@@ -568,6 +622,10 @@ cleanup:
         free_matrice(o_t_heads, layer->n_h);
 
     free(o_t);
+
+    // Add new normalizations to cleanup
+    free(normalized_q);
+    free(normalized_kv);
 
     return u_t;
 }
